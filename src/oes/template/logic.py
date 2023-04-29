@@ -2,48 +2,67 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from attrs import frozen
-from cattrs import Converter
 
-from oes.template.types import Context, Evaluable, Value, ValueTypes
+from oes.template import Expression
+from oes.template.types import (
+    Context,
+    Evaluable,
+    LiteralValueOrEvaluable,
+    LiteralValueTypes,
+)
+
+if TYPE_CHECKING:
+    from cattrs import Converter
 
 
 @frozen
 class LogicAnd(Evaluable):
     """Logic AND."""
 
-    and_: LogicExpressions
+    and_: Condition
 
     def evaluate(self, **context: Any) -> bool:
-        return all(_eval_expr(self.and_, context))
+        return all(_eval_condition(self.and_, context))
 
 
 @frozen
 class LogicOr(Evaluable):
     """Logic OR."""
 
-    or_: LogicExpressions
+    or_: Condition
 
     def evaluate(self, **context: Any) -> bool:
-        return any(_eval_expr(self.or_, context))
+        return any(_eval_condition(self.or_, context))
 
 
 LogicExpression = Union[
-    Value,
-    Evaluable,
+    LiteralValueOrEvaluable,
     LogicAnd,
     LogicOr,
     None,
 ]
+"""A logic expression.
 
-LogicExpressions = Union[Sequence, LogicExpression]
+One of:
+  - A literal value (str, int, float, bool)
+  - An :class:`Evaluable` (i.e. a template expression)
+  - A :class:`LogicAnd`
+  - A :class:`LogicOr`
+  - ``None``
+"""
 
-Condition = LogicExpressions
+Condition = Union[Sequence, LogicExpression]
+"""A single :class:`LogicExpression` or a sequence of them.
+
+Sequences are evaluated as an implicit logic AND of the items.
+"""
 
 
-def _iter_expr(expr: LogicExpressions) -> Iterable[LogicExpression]:
+def _as_iterable(expr: Condition) -> Iterable[Condition]:
+    """Turn scalars into an iterable of only that scalar."""
     if isinstance(expr, Sequence) and not isinstance(expr, str):
         yield from expr
     else:
@@ -51,58 +70,66 @@ def _iter_expr(expr: LogicExpressions) -> Iterable[LogicExpression]:
 
 
 def _eval(obj: object, context: Context) -> Any:
+    """Return a literal value, or evaluate an evaluable."""
     if isinstance(obj, Evaluable):
         return obj.evaluate(**context)
     else:
         return obj
 
 
-def _eval_expr(expr: LogicExpressions, context: Context) -> Iterable[Any]:
-    for e in _iter_expr(expr):
+def _eval_condition(expr: Condition, context: Context) -> Iterable[Any]:
+    """Evaulate a scalar or sequence, yielding the results of each."""
+    for e in _as_iterable(expr):
         yield _eval(e, context)
 
 
 def evaluate(cond: Condition, context: Context) -> bool:
     """Evaluate a :class:`Condition`."""
-    return all(_eval_expr(cond, context))
+    return all(_eval_condition(cond, context))
 
 
-def _structure_and_or(converter: Converter, v):
-    if "and" in v:
-        return converter.structure(
-            {**v, "and_": v["and"]},
-            LogicAnd,
-        )
-    elif "or" in v:
-        return converter.structure(
-            {
-                **v,
-                "or_": v["or"],
-            },
-            LogicOr,
-        )
-    else:
-        raise ValueError(f"Invalid expression: {v!r}")
-
-
-def structure_logic_expressions(converter: Converter, v: object) -> object:
-    if isinstance(v, dict):
-        return _structure_and_or(converter, v)
-    elif isinstance(v, Sequence) and not isinstance(v, str):
-        # implicit AND
-        return tuple(converter.structure(e, LogicExpressions) for e in v)
-    elif isinstance(v, str):
-        # Assume strings are template expressions
-        return converter.structure(v, Evaluable)
-    elif v is None or isinstance(v, ValueTypes):
+def structure_logic_expression(converter: Converter, v: object):  # noqa: CCR001
+    if isinstance(v, str):
+        # All strings are treated as template expressions
+        return converter.structure(v, Expression)
+    elif v is None or isinstance(v, LiteralValueTypes):
         return v
+    elif isinstance(v, dict) and "and" in v:
+        return structure_and(converter, v)
+    elif isinstance(v, dict) and "or" in v:
+        return structure_or(converter, v)
+    else:
+        raise TypeError(f"Invalid type: {v!r}")
 
-    raise ValueError(f"Invalid expression: {v!r}")
+
+def structure_and(converter: Converter, v: object) -> LogicAnd:
+    if isinstance(v, dict) and "and" in v:
+        exprs = v["and"]
+    else:
+        exprs = v
+
+    return LogicAnd(structure_condition(converter, exprs))
 
 
-def unstructure_and(converter: Converter, v: LogicAnd) -> dict[str, Any]:
+def structure_or(converter: Converter, v: object) -> LogicOr:
+    if isinstance(v, dict) and "or" in v:
+        exprs = v["or"]
+    else:
+        exprs = v
+
+    return LogicOr(structure_condition(converter, exprs))
+
+
+def structure_condition(converter: Converter, v: object):
+    if isinstance(v, Sequence) and not isinstance(v, str):
+        return tuple(structure_logic_expression(converter, c) for c in v)
+    else:
+        return structure_logic_expression(converter, v)
+
+
+def unstructure_and(converter: Converter, v: LogicAnd) -> dict:
     return {"and": converter.unstructure(v.and_)}
 
 
-def unstructure_or(converter: Converter, v: LogicOr) -> dict[str, Any]:
+def unstructure_or(converter: Converter, v: LogicOr) -> dict:
     return {"or": converter.unstructure(v.or_)}

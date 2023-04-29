@@ -2,8 +2,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Union
 
-from cattrs import Converter
-
 Context = dict[str, Any]
 """Template/expression context"""
 
@@ -17,21 +15,9 @@ class Evaluable(ABC):
         ...
 
 
-ValueTypes = (int, float, bool, str)
-Value = Union[int, float, bool, str]
-ValueOrEvaluable = Union[Value, Evaluable]
+LiteralValueTypes = (int, float, bool, str)
+LiteralValue = Union[int, float, bool, str]
+"""Literal value types."""
 
-
-def structure_value(v: object) -> object:
-    if isinstance(v, ValueTypes):
-        return v
-    else:
-        raise TypeError(f"Invalid value: {v!r}")
-
-
-def structure_value_or_evaluable(converter: Converter, v) -> ValueOrEvaluable:
-    if isinstance(v, str):
-        # assume strings are template expressions
-        return converter.structure(v, Evaluable)
-    else:
-        return converter.structure(v, Value)
+LiteralValueOrEvaluable = Union[LiteralValue, Evaluable]
+"""A literal value, or an :class:`Evaluable`."""

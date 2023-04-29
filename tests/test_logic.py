@@ -1,12 +1,29 @@
 import pytest
 from cattrs.preconf.json import make_converter
 
+from oes.template import (
+    Expression,
+    LogicAnd,
+    LogicOr,
+    structure_condition,
+    structure_expression,
+    unstructure_and,
+    unstructure_expression,
+    unstructure_or,
+)
 from oes.template.logic import Condition, evaluate
-from oes.template.serialization import configure_converter
 
 converter = make_converter()
-
-configure_converter(converter)
+converter.register_structure_hook(Expression, lambda v, t: structure_expression(v))
+converter.register_structure_hook(
+    Condition, lambda v, t: structure_condition(converter, v)
+)
+converter.register_unstructure_hook(
+    Expression,
+    lambda v: unstructure_expression(v),
+)
+converter.register_unstructure_hook(LogicAnd, lambda v: unstructure_and(converter, v))
+converter.register_unstructure_hook(LogicOr, lambda v: unstructure_or(converter, v))
 
 cases = [
     (
@@ -85,7 +102,7 @@ cases = [
         True,
     ),
     (
-        ("true", (True, False)),
+        ("true", {"or": (True, False)}),
         {},
         True,
     ),
